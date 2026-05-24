@@ -7,6 +7,48 @@ import type {
 
 export type { DispatcherAlert, TriageResponse, UserProfile, TriageErrorResponse };
 
+export type EmergencyTrigger = "user_112" | "critical_button";
+
+export async function sendEmergencyAlert(args: {
+  patient: UserProfile | null;
+  triage: TriageResponse | null;
+  location?: { lat: number; lng: number } | null;
+  triggeredBy: EmergencyTrigger;
+}): Promise<DispatcherAlert | null> {
+  try {
+    const resp = await fetch("/api/dispatcher/emergency", {
+      method: "POST",
+      headers: { "content-type": "application/json", Accept: "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(args),
+    });
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as { alert?: DispatcherAlert };
+    return data.alert ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function updateAlertStatus(
+  id: string,
+  status: DispatcherAlert["status"],
+): Promise<DispatcherAlert | null> {
+  try {
+    const resp = await fetch(`/api/dispatcher/alert/${encodeURIComponent(id)}/status`, {
+      method: "POST",
+      headers: { "content-type": "application/json", Accept: "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ status }),
+    });
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as { alert?: DispatcherAlert };
+    return data.alert ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** localStorage keys */
 const LS_KEY = "safecall.geminiApiKey";
 const LS_MODEL = "safecall.geminiModel";

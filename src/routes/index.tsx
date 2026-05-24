@@ -1,6 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { triageEmergency, TriageError, type TriageResponse } from "@/lib/safecall-client";
+import {
+  triageEmergency,
+  TriageError,
+  sendEmergencyAlert,
+  type TriageResponse,
+} from "@/lib/safecall-client";
+import { getBrowserLocation } from "@/lib/location";
 import { ApiKeyButton } from "@/components/safecall/api-key-dialog";
 import { toast } from "sonner";
 import {
@@ -34,7 +40,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { MOCK_USER, type UserProfile } from "@/lib/mock-user";
+import { PATIENTS, type Patient } from "@/lib/patient-database";
+import { getCurrentPatient, setCurrentPatient, setLastTriage } from "@/lib/current-patient";
+import type { UserProfile } from "@/api/safecall-handlers";
 import { EmergencyButton112 } from "@/components/safecall/emergency-button";
 import { Disclaimers } from "@/components/safecall/disclaimers";
 
@@ -62,23 +70,46 @@ function SafeCallApp() {
   const [forceCritical, setForceCritical] = useState<boolean | null>(null);
   const [triageResponse, setTriageResponse] = useState<TriageResponse | null>(null);
 
-  const handleAuthSuccess = () => {
+  // Restore any previously-selected patient from a prior session.
+  useEffect(() => {
+    const existing = getCurrentPatient();
+    if (existing) {
+      setUserProfile(existing);
+      setIsAuthenticated(true);
+      setScreen("MAIN");
+    }
+  }, []);
+
+  const handleAuthSuccess = (patient: Patient) => {
     setIsAuthenticated(true);
-    setUserProfile(MOCK_USER);
+    setUserProfile(patient);
+    setCurrentPatient(patient.id);
     setScreen("MAIN");
-    toast.success("Profil medical sincronizat", {
-      description: "Datele tale ROeID sunt disponibile pentru echipajele medicale.",
+    toast.success(`Bun venit, ${patient.name.split(" ")[0]}`, {
+      description: "Dosarul tău ROeID este sincronizat cu SafeCall.",
     });
   };
 
   const handleGuestBypass = () => {
     setIsAuthenticated(false);
     setUserProfile(null);
+    setCurrentPatient(null);
     setScreen("MAIN");
+  };
+
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    setUserProfile(null);
+    setCurrentPatient(null);
+    setLastTriage(null);
+    setTriageResponse(null);
+    setAppState("IDLE");
+    setScreen("AUTH");
   };
 
   const resetToIdle = () => {
     setTriageResponse(null);
+    setLastTriage(null);
     setAppState("IDLE");
   };
 
@@ -88,6 +119,7 @@ function SafeCallApp() {
       return;
     }
     setTriageResponse(resp);
+    setLastTriage(resp);
     setAppState(resp.severity >= 4 ? "RESULT_CRITICAL" : "RESULT_MINOR");
   };
 
@@ -104,11 +136,12 @@ function SafeCallApp() {
           triageResponse={triageResponse}
           onProcessingComplete={handleProcessingComplete}
           onReset={resetToIdle}
+          onLogout={handleLogout}
           forceCritical={forceCritical}
           setForceCritical={setForceCritical}
         />
       )}
-      {screen === "MAIN" && <EmergencyButton112 />}
+      {screen === "MAIN" && <EmergencyButton112 patient={userProfile} triage={triageResponse} />}
     </main>
   );
 }
@@ -119,18 +152,21 @@ function AuthScreen({
   onAuthenticated,
   onBypass,
 }: {
-  onAuthenticated: () => void;
+  onAuthenticated: (patient: Patient) => void;
   onBypass: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<1 | 2>(1);
-  const [cnp, setCnp] = useState("1900512123456");
-  const [password, setPassword] = useState("••••••••");
+  const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [sms, setSms] = useState("");
 
   const close = () => {
     setOpen(false);
-    setTimeout(() => setStep(1), 200);
+    setTimeout(() => {
+      setStep(1);
+      setSelectedPatient(null);
+      setSms("");
+    }, 200);
   };
 
   return (
@@ -177,41 +213,61 @@ function AuthScreen({
       </div>
 
       <Dialog open={open} onOpenChange={(o) => (o ? setOpen(true) : close())}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ShieldCheck className="h-5 w-5 text-primary" />
-              {step === 1 ? "Autentificare ROeID" : "Verificare 2FA"}
+              {step === 1 ? "Alege identitatea ROeID" : "Verificare 2FA"}
             </DialogTitle>
             <DialogDescription>
               {step === 1
-                ? "Introdu credențialele tale ROeID pentru a continua."
-                : "Am trimis un cod SMS la numărul asociat. Introdu-l mai jos."}
+                ? "Pentru demo, identitatea ROeID este simulată. Alege un cetățean din baza de date pentru a-i încărca dosarul medical."
+                : `Cod SMS trimis către ${selectedPatient?.phone ?? "..."}. Introdu codul de mai jos.`}
             </DialogDescription>
           </DialogHeader>
 
           {step === 1 ? (
-            <div className="space-y-4 pt-2">
-              <div className="space-y-2">
-                <Label htmlFor="cnp">CNP / Username</Label>
-                <Input id="cnp" value={cnp} onChange={(e) => setCnp(e.target.value)} />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="pwd">Parolă</Label>
-                <Input
-                  id="pwd"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </div>
-              <Button className="w-full" onClick={() => setStep(2)}>
-                Continuă
-                <ChevronRight />
-              </Button>
+            <div className="max-h-[60vh] space-y-2 overflow-y-auto pt-2">
+              {PATIENTS.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => {
+                    setSelectedPatient(p);
+                    setStep(2);
+                  }}
+                  className="flex w-full items-start justify-between gap-3 rounded-lg border border-border/70 bg-card p-3 text-left transition-colors hover:border-primary/40 hover:bg-muted/40"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground">
+                      {p.name}{" "}
+                      <span className="font-normal text-muted-foreground">
+                        · {p.age} ani · {p.sex}
+                      </span>
+                    </p>
+                    <p className="truncate text-xs text-muted-foreground">
+                      CNP {p.cnp.slice(0, 4)}•••••{p.cnp.slice(-2)} ·{" "}
+                      {p.chronicConditions.length > 0
+                        ? p.chronicConditions[0]
+                        : "fără afecțiuni cronice"}
+                    </p>
+                    {p.allergies.length > 0 && (
+                      <p className="mt-0.5 truncate text-[11px] text-destructive">
+                        ⚠ Alergie: {p.allergies.join(", ")}
+                      </p>
+                    )}
+                  </div>
+                  <ChevronRight className="mt-1 h-4 w-4 flex-none text-muted-foreground" />
+                </button>
+              ))}
             </div>
           ) : (
             <div className="space-y-4 pt-2">
+              <div className="rounded-md border border-border/70 bg-muted/30 p-3 text-xs">
+                <p className="font-medium text-foreground">{selectedPatient?.name}</p>
+                <p className="text-muted-foreground">
+                  CNP {selectedPatient?.cnp} · {selectedPatient?.address}
+                </p>
+              </div>
               <div className="space-y-2">
                 <Label htmlFor="sms">Cod SMS</Label>
                 <Input
@@ -226,13 +282,21 @@ function AuthScreen({
               <Button
                 className="w-full"
                 onClick={() => {
+                  if (!selectedPatient) return;
+                  const p = selectedPatient;
                   close();
-                  onAuthenticated();
+                  onAuthenticated(p);
                 }}
               >
                 <BadgeCheck />
                 Verifică și autentifică-te
               </Button>
+              <button
+                onClick={() => setStep(1)}
+                className="w-full text-center text-xs text-muted-foreground hover:text-foreground"
+              >
+                ← alege alt utilizator
+              </button>
             </div>
           )}
         </DialogContent>
@@ -251,6 +315,7 @@ function MainScreen({
   triageResponse,
   onProcessingComplete,
   onReset,
+  onLogout,
   forceCritical,
   setForceCritical,
 }: {
@@ -261,12 +326,13 @@ function MainScreen({
   triageResponse: TriageResponse | null;
   onProcessingComplete: (resp: TriageResponse | null) => void;
   onReset: () => void;
+  onLogout: () => void;
   forceCritical: boolean | null;
   setForceCritical: (v: boolean | null) => void;
 }) {
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-2xl flex-col px-5 py-6 sm:py-10">
-      <Header isAuthenticated={isAuthenticated} userProfile={userProfile} />
+      <Header isAuthenticated={isAuthenticated} userProfile={userProfile} onLogout={onLogout} />
 
       <div className="mt-8 flex-1">
         {appState === "RESULT_CRITICAL" && triageResponse ? (
@@ -299,9 +365,11 @@ function MainScreen({
 function Header({
   isAuthenticated,
   userProfile,
+  onLogout,
 }: {
   isAuthenticated: boolean;
   userProfile: UserProfile | null;
+  onLogout: () => void;
 }) {
   return (
     <header className="flex items-center justify-between">
@@ -345,6 +413,13 @@ function Header({
           <Stethoscope className="h-3.5 w-3.5" />
           Dispecerat
         </Link>
+        <button
+          onClick={onLogout}
+          className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground ring-1 ring-inset ring-border transition-colors hover:bg-foreground hover:text-background"
+          title={isAuthenticated ? "Schimbă utilizatorul" : "Înapoi la autentificare"}
+        >
+          {isAuthenticated ? "Schimbă utilizatorul" : "Autentificare"}
+        </button>
       </div>
     </header>
   );
@@ -668,6 +743,29 @@ function SourceBadge({ response }: { response: TriageResponse }) {
   );
 }
 
+function ContextBanner({ response }: { response: TriageResponse }) {
+  const items = response.consideredContext ?? [];
+  if (items.length === 0) return null;
+  return (
+    <Card className="mt-4 border-primary/25 bg-primary/5 p-3">
+      <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-primary">
+        <FileHeart className="h-3.5 w-3.5" />
+        AI a luat în calcul din fișa ta medicală
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {items.map((it, i) => (
+          <span
+            key={i}
+            className="inline-flex items-center rounded-full bg-background px-2.5 py-0.5 text-xs text-foreground ring-1 ring-inset ring-primary/20"
+          >
+            {it}
+          </span>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 function CriticalView({
   userProfile,
   response,
@@ -679,12 +777,37 @@ function CriticalView({
 }) {
   const name = userProfile?.name.split(" ")[0] ?? "Tu";
   const dispatcher = response.dataForDispatcher;
+  const [sending, setSending] = useState(false);
 
-  const handleCall = () => {
-    toast.success("Date transmise către dispeceratul 112.", {
-      description: "Dosarul medical, locația și sumarul AI au fost trimise. Apel inițiat.",
-      duration: 5000,
-    });
+  const handleCall = async () => {
+    setSending(true);
+    try {
+      const location = await getBrowserLocation();
+      const alert = await sendEmergencyAlert({
+        patient: userProfile,
+        triage: response,
+        location,
+        triggeredBy: "critical_button",
+      });
+      if (alert) {
+        toast.success("Date transmise către dispeceratul 112.", {
+          description: "Dosarul medical, locația și sumarul AI au fost trimise. Apel inițiat.",
+          duration: 5000,
+        });
+        try {
+          if (typeof window !== "undefined") window.location.href = "tel:112";
+        } catch {
+          // ignore
+        }
+      } else {
+        toast.error("Nu am putut transmite alerta către dispecerat", {
+          description:
+            "Verifică rețeaua. Apelul către 112 rămâne disponibil oricând din butonul roșu din colț.",
+        });
+      }
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -708,6 +831,8 @@ function CriticalView({
       <h2 className="text-2xl font-semibold leading-snug tracking-tight text-foreground sm:text-[1.65rem]">
         {name}, {response.uiMessage}
       </h2>
+
+      <ContextBanner response={response} />
 
       <Card className="mt-6 border-destructive/30 bg-destructive/5 p-5">
         <p className="mb-4 flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-destructive">
@@ -755,10 +880,11 @@ function CriticalView({
       <Button
         size="lg"
         onClick={handleCall}
-        className="mt-6 h-14 w-full bg-destructive text-base text-destructive-foreground hover:bg-destructive/90"
+        disabled={sending}
+        className="mt-6 h-14 w-full bg-destructive text-base text-destructive-foreground hover:bg-destructive/90 disabled:opacity-70"
       >
-        <PhoneCall className="h-5 w-5" />
-        Contactează Serviciul de Urgență (112)
+        {sending ? <Loader2 className="h-5 w-5 animate-spin" /> : <PhoneCall className="h-5 w-5" />}
+        {sending ? "Transmit dispeceratului..." : "Contactează Serviciul de Urgență (112)"}
       </Button>
 
       <p className="mt-3 text-center text-xs leading-relaxed text-muted-foreground">
@@ -806,6 +932,8 @@ function MinorView({ response, onReset }: { response: TriageResponse; onReset: (
       <h2 className="text-2xl font-semibold leading-snug tracking-tight text-foreground sm:text-[1.65rem]">
         {response.uiMessage}
       </h2>
+
+      <ContextBanner response={response} />
 
       {/* Rich result cards */}
       <div className="mt-6 grid gap-3">

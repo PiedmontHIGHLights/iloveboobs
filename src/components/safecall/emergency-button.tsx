@@ -1,22 +1,45 @@
 import { useEffect, useRef, useState } from "react";
 import { PhoneCall } from "lucide-react";
 import { toast } from "sonner";
+import { sendEmergencyAlert, type TriageResponse, type UserProfile } from "@/lib/safecall-client";
+import { getBrowserLocation } from "@/lib/location";
 
 /**
  * Fail-safe 112 button — fixed in the bottom-right corner.
  *
  * Per spec: must require a 1.5s long-press to avoid accidental dialing.
- * After the threshold, it triggers `tel:112` on supported devices and
- * shows a confirmation toast in any case.
+ * After the threshold, the button:
+ *  1. Posts a structured alert to /api/dispatcher/emergency carrying the
+ *     current patient (ROeID) + the last triage conversation + GPS location.
+ *  2. Best-effort opens `tel:112` on devices that handle it.
+ *
+ * The alert is recorded server-side even if the user dismisses the system
+ * dialer — that's exactly the safety net the spec requires (the doctor sees
+ * the call attempt with all medical context).
  */
 const LONG_PRESS_MS = 1500;
 
-export function EmergencyButton112() {
+export function EmergencyButton112({
+  patient,
+  triage,
+}: {
+  patient: UserProfile | null;
+  triage: TriageResponse | null;
+}) {
   const [progress, setProgress] = useState(0);
   const [armed, setArmed] = useState(false);
   const startedAtRef = useRef<number | null>(null);
   const rafRef = useRef<number | null>(null);
   const firedRef = useRef(false);
+  const patientRef = useRef(patient);
+  const triageRef = useRef(triage);
+
+  useEffect(() => {
+    patientRef.current = patient;
+  }, [patient]);
+  useEffect(() => {
+    triageRef.current = triage;
+  }, [triage]);
 
   const reset = () => {
     startedAtRef.current = null;
@@ -36,7 +59,7 @@ export function EmergencyButton112() {
     setProgress(ratio);
     if (ratio >= 1 && !firedRef.current) {
       firedRef.current = true;
-      fireCall();
+      void fireCall();
       return;
     }
     rafRef.current = requestAnimationFrame(tick);
@@ -52,23 +75,34 @@ export function EmergencyButton112() {
 
   const cancel = () => {
     if (firedRef.current) {
-      // The call fired; still clear the visual state shortly after.
       setTimeout(reset, 400);
       return;
     }
     reset();
   };
 
-  const fireCall = () => {
-    toast.success("Apel către 112 inițiat", {
-      description: "În mod normal aplicația apelează direct numărul de urgență.",
-      duration: 4000,
+  const fireCall = async () => {
+    const location = await getBrowserLocation();
+    const alert = await sendEmergencyAlert({
+      patient: patientRef.current,
+      triage: triageRef.current,
+      location,
+      triggeredBy: "user_112",
     });
+    if (alert) {
+      toast.success("Alertă transmisă la dispeceratul 112", {
+        description: patientRef.current
+          ? `Dosarul medical al ${patientRef.current.name.split(" ")[0]} și ultima conversație au fost trimise.`
+          : "Apel 112 inițiat fără profil medical (mod invitat).",
+        duration: 5000,
+      });
+    } else {
+      toast.error("Alerta către dispecerat a eșuat", {
+        description: "Verifică rețeaua. Apelul direct rămâne disponibil.",
+      });
+    }
     try {
-      // Best-effort: open the tel: handler on mobile devices.
-      if (typeof window !== "undefined") {
-        window.location.href = "tel:112";
-      }
+      if (typeof window !== "undefined") window.location.href = "tel:112";
     } catch {
       // ignore
     }
@@ -91,7 +125,6 @@ export function EmergencyButton112() {
         }`}
         style={{ touchAction: "none" }}
       >
-        {/* Progress ring */}
         <span
           className="absolute inset-0 rounded-full"
           style={{
