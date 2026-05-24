@@ -16,7 +16,7 @@ import {
   listDispatcherAlerts,
   clearDispatcherAlerts,
   type DispatcherAlert,
-} from "@/api/dispatcher";
+} from "@/lib/safecall-client";
 
 export const Route = createFileRoute("/dispatcher")({
   head: () => ({

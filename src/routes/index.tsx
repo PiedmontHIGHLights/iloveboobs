@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { triageEmergency, type TriageResponse } from "@/api/triage";
+import { triageEmergency, type TriageResponse } from "@/lib/safecall-client";
 import { toast } from "sonner";
 import {
   AlertTriangle,
@@ -384,18 +384,12 @@ function TriggerView({
   const sendAudio = async (blob: Blob) => {
     setAppState("PROCESSING");
     try {
-      const fd = new FormData();
-      fd.append("audioBlob", blob, "symptoms.webm");
-      if (isAuthenticated && userProfile) {
-        fd.append("userProfile", JSON.stringify(userProfile));
-      }
-      fd.append("language", "ro");
-      fd.append(
-        "forceCritical",
-        forceCritical === null ? "auto" : forceCritical ? "true" : "false",
-      );
-
-      const resp = await triageEmergency({ data: fd });
+      const resp = await triageEmergency({
+        audioBlob: blob,
+        userProfile: isAuthenticated ? userProfile : null,
+        language: "ro",
+        forceCritical: forceCritical === null ? "auto" : forceCritical ? "true" : "false",
+      });
       onTriage(resp);
     } catch (err) {
       console.error(err);
