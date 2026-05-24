@@ -1,21 +1,25 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { triageEmergency } from "@/api/triage";
+import { triageEmergency, type TriageResponse } from "@/api/triage";
 import { toast } from "sonner";
 import {
-  Activity,
+  AlertTriangle,
   ArrowLeft,
   BadgeCheck,
   ChevronRight,
   Clock,
   FileHeart,
+  Heart,
+  Languages,
   Loader2,
-  Mic,
   MapPin,
+  Mic,
   PhoneCall,
   Pill,
   ShieldCheck,
   Sparkles,
+  Stethoscope,
+  TriangleAlert,
   UserRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -29,79 +33,40 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MOCK_USER, type UserProfile } from "@/lib/mock-user";
+import { EmergencyButton112 } from "@/components/safecall/emergency-button";
+import { Disclaimers } from "@/components/safecall/disclaimers";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Sanitas AI — Triaj medical inteligent" },
+      { title: "SafeCall — Triaj vocal pentru 112" },
       {
         name: "description",
         content:
-          "Sanitas AI: triaj medical digital prin ROeID. Descrie simptomele și primește îndrumare calmă, profesională.",
+          "SafeCall: asistentul vocal AI care filtrează apelurile la 112. Descrie simptomele și primește îndrumare calmă, în orice limbă.",
       },
     ],
   }),
-  component: SanitasApp,
+  component: SafeCallApp,
 });
 
 type AppState = "IDLE" | "RECORDING" | "PROCESSING" | "RESULT_MINOR" | "RESULT_CRITICAL";
 
-type DispatcherPayload = {
-  summary: string;
-  vitalsRisk: string;
-};
-
-type TriageResponse = {
-  severity: 1 | 2 | 3 | 4 | 5;
-  uiMessage: string;
-  dataForDispatcher?: DispatcherPayload;
-};
-
-type UserProfile = {
-  name: string;
-  cnp: string;
-  age: number;
-  allergies: string[];
-  chronicConditions: string[];
-};
-
-const MOCK_USER: UserProfile = {
-  name: "Andrei Popescu",
-  cnp: "1900512123456",
-  age: 35,
-  allergies: ["Penicilină"],
-  chronicConditions: ["Hipertensiune arterială"],
-};
-
-const CRITICAL_RESPONSE = {
-  severity: 5,
-  uiMessage:
-    "pentru siguranța ta, este indicat ca un echipaj medical să evalueze rapid situația. Cel mai bine este să contactezi serviciul de urgență. Între timp, așează-te relaxat pe un scaun sau fotoliu.",
-  dataForDispatcher: {
-    summary: "Durere toracică severă, iradiere braț stâng, transpirații reci.",
-    vitalsRisk: "Posibil sindrom coronarian acut",
-  },
-};
-
-const MINOR_RESPONSE = {
-  severity: 2,
-  uiMessage:
-    "Situația nu pare a fi o urgență vitală, dar ai nevoie de îngrijire. Pentru durerea descrisă, poți consulta un farmacist pentru un tratament adecvat.",
-};
-
-function SanitasApp() {
+function SafeCallApp() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [appState, setAppState] = useState<AppState>("IDLE");
   const [screen, setScreen] = useState<"AUTH" | "MAIN">("AUTH");
-  const [forceCritical, setForceCritical] = useState<boolean | null>(null); // demo toggle
+  const [forceCritical, setForceCritical] = useState<boolean | null>(null);
+  const [triageResponse, setTriageResponse] = useState<TriageResponse | null>(null);
 
   const handleAuthSuccess = () => {
     setIsAuthenticated(true);
     setUserProfile(MOCK_USER);
     setScreen("MAIN");
-    toast.success("Profil medical sincronizat cu succes", {
-      description: "Datele tale ROeID sunt acum disponibile pentru echipajele medicale.",
+    toast.success("Profil medical sincronizat", {
+      description: "Datele tale ROeID sunt disponibile pentru echipajele medicale.",
     });
   };
 
@@ -111,23 +76,22 @@ function SanitasApp() {
     setScreen("MAIN");
   };
 
-  const [triageResponse, setTriageResponse] = useState<TriageResponse | null>(null);
-
   const resetToIdle = () => {
     setTriageResponse(null);
     setAppState("IDLE");
   };
 
-  const handleProcessingComplete = async (resp: TriageResponse) => {
+  const handleProcessingComplete = (resp: TriageResponse | null) => {
+    if (!resp) {
+      setAppState("IDLE");
+      return;
+    }
     setTriageResponse(resp);
     setAppState(resp.severity >= 4 ? "RESULT_CRITICAL" : "RESULT_MINOR");
   };
 
-  // replaced above with resetToIdle that also clears triageResponse
-  
-
   return (
-    <main className="min-h-screen bg-gradient-to-b from-background via-background to-secondary/40">
+    <main className="relative min-h-screen bg-gradient-to-b from-background via-background to-secondary/40">
       {screen === "AUTH" ? (
         <AuthScreen onAuthenticated={handleAuthSuccess} onBypass={handleGuestBypass} />
       ) : (
@@ -136,14 +100,14 @@ function SanitasApp() {
           userProfile={userProfile}
           appState={appState}
           setAppState={setAppState}
-          onProcessingComplete={(resp: TriageResponse) => {
-            if (resp) handleProcessingComplete(resp);
-          }}
+          triageResponse={triageResponse}
+          onProcessingComplete={handleProcessingComplete}
           onReset={resetToIdle}
           forceCritical={forceCritical}
           setForceCritical={setForceCritical}
         />
       )}
+      {screen === "MAIN" && <EmergencyButton112 />}
     </main>
   );
 }
@@ -173,26 +137,20 @@ function AuthScreen({
       <div className="w-full max-w-md">
         <div className="mb-10 flex flex-col items-center text-center">
           <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10 ring-1 ring-primary/15">
-            <Activity className="h-8 w-8 text-primary" strokeWidth={2.2} />
+            <ShieldCheck className="h-8 w-8 text-primary" strokeWidth={2.2} />
           </div>
-          <h1 className="text-3xl font-semibold tracking-tight text-foreground">
-            Sanitas AI
-          </h1>
+          <h1 className="text-3xl font-semibold tracking-tight text-foreground">SafeCall</h1>
           <p className="mt-1 text-sm font-medium text-muted-foreground">
-            Acces prin ROeID
+            Triaj vocal pentru 112 · România Digitală
           </p>
           <p className="mt-4 max-w-sm text-sm leading-relaxed text-muted-foreground">
-            Triaj medical inteligent. Autentifică-te pentru ca sumarul tău
-            medical să fie disponibil instant echipajelor de urgență.
+            Autentifică-te prin ROeID pentru ca dosarul tău medical să fie transmis instant la
+            dispecerat în caz de urgență reală.
           </p>
         </div>
 
         <Card className="border-border/70 p-6 shadow-sm">
-          <Button
-            size="lg"
-            className="h-12 w-full text-base"
-            onClick={() => setOpen(true)}
-          >
+          <Button size="lg" className="h-12 w-full text-base" onClick={() => setOpen(true)}>
             <ShieldCheck className="h-5 w-5" />
             Autentificare cu ROeID
           </Button>
@@ -207,13 +165,13 @@ function AuthScreen({
             onClick={onBypass}
             className="w-full rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
-            Ai o urgență acum? Sari peste autentificare
-            <span className="block text-xs opacity-75">(Fără profil medical)</span>
+            Sari peste — am o urgență acum
+            <span className="block text-xs opacity-75">(fără preluarea fișei medicale)</span>
           </button>
         </Card>
 
         <p className="mt-6 text-center text-xs text-muted-foreground">
-          Sanitas AI · Hackathon România Digitală
+          SafeCall · Cluj Hackathon 2026 · Digital Romania
         </p>
       </div>
 
@@ -235,11 +193,7 @@ function AuthScreen({
             <div className="space-y-4 pt-2">
               <div className="space-y-2">
                 <Label htmlFor="cnp">CNP / Username</Label>
-                <Input
-                  id="cnp"
-                  value={cnp}
-                  onChange={(e) => setCnp(e.target.value)}
-                />
+                <Input id="cnp" value={cnp} onChange={(e) => setCnp(e.target.value)} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="pwd">Parolă</Label>
@@ -266,9 +220,7 @@ function AuthScreen({
                   value={sms}
                   onChange={(e) => setSms(e.target.value)}
                 />
-                <p className="text-xs text-muted-foreground">
-                  Demo: orice cod este acceptat.
-                </p>
+                <p className="text-xs text-muted-foreground">Demo: orice cod este acceptat.</p>
               </div>
               <Button
                 className="w-full"
@@ -295,6 +247,7 @@ function MainScreen({
   userProfile,
   appState,
   setAppState,
+  triageResponse,
   onProcessingComplete,
   onReset,
   forceCritical,
@@ -304,53 +257,38 @@ function MainScreen({
   userProfile: UserProfile | null;
   appState: AppState;
   setAppState: (s: AppState) => void;
-  onProcessingComplete: (resp: TriageResponse) => void;
+  triageResponse: TriageResponse | null;
+  onProcessingComplete: (resp: TriageResponse | null) => void;
   onReset: () => void;
   forceCritical: boolean | null;
   setForceCritical: (v: boolean | null) => void;
 }) {
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (appState === "PROCESSING") {
-      timerRef.current = setTimeout(() => onProcessingComplete(), 2000);
-    }
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, [appState, onProcessingComplete]);
-
-  const handlePress = () => {
-    if (appState === "IDLE") setAppState("RECORDING");
-  };
-  const handleRelease = () => {
-    if (appState === "RECORDING") setAppState("PROCESSING");
-  };
-
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-2xl flex-col px-5 py-6 sm:py-10">
       <Header isAuthenticated={isAuthenticated} userProfile={userProfile} />
 
       <div className="mt-8 flex-1">
-        {appState === "RESULT_CRITICAL" ? (
-          <CriticalView userProfile={userProfile} onReset={onReset} />
-        ) : appState === "RESULT_MINOR" ? (
-          <MinorView onReset={onReset} />
+        {appState === "RESULT_CRITICAL" && triageResponse ? (
+          <CriticalView userProfile={userProfile} response={triageResponse} onReset={onReset} />
+        ) : appState === "RESULT_MINOR" && triageResponse ? (
+          <MinorView response={triageResponse} onReset={onReset} />
         ) : (
           <TriggerView
             appState={appState}
-            onPress={handlePress}
-            onRelease={handleRelease}
+            setAppState={setAppState}
             onTriage={onProcessingComplete}
             isAuthenticated={isAuthenticated}
             userProfile={userProfile}
+            forceCritical={forceCritical}
           />
         )}
       </div>
 
       {(appState === "IDLE" || appState === "RECORDING") && (
-        <SecondaryActions />
+        <SecondaryActions isAuthenticated={isAuthenticated} />
       )}
+
+      <Disclaimers />
 
       <DemoToggle value={forceCritical} onChange={setForceCritical} />
     </div>
@@ -368,11 +306,11 @@ function Header({
     <header className="flex items-center justify-between">
       <div className="flex items-center gap-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/15">
-          <Activity className="h-5 w-5 text-primary" strokeWidth={2.2} />
+          <ShieldCheck className="h-5 w-5 text-primary" strokeWidth={2.2} />
         </div>
         <div>
           <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Sanitas AI
+            SafeCall
           </p>
           <p className="text-sm font-semibold text-foreground">
             {isAuthenticated && userProfile
@@ -382,56 +320,126 @@ function Header({
         </div>
       </div>
 
-      {isAuthenticated ? (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-success/10 px-3 py-1 text-xs font-medium text-[color:var(--success)] ring-1 ring-inset ring-[color:var(--success)]/20">
-          <BadgeCheck className="h-3.5 w-3.5" />
-          ROeID Sincronizat
-        </span>
-      ) : (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-xs font-medium text-muted-foreground ring-1 ring-inset ring-border">
-          <UserRound className="h-3.5 w-3.5" />
-          Date nesincronizate
-        </span>
-      )}
+      <div className="flex items-center gap-2">
+        {isAuthenticated ? (
+          <Link
+            to="/profile"
+            className="inline-flex items-center gap-1.5 rounded-full bg-[color:var(--success)]/10 px-3 py-1 text-xs font-medium text-[color:var(--success)] ring-1 ring-inset ring-[color:var(--success)]/25 transition-colors hover:bg-[color:var(--success)]/15"
+          >
+            <BadgeCheck className="h-3.5 w-3.5" />
+            ROeID Sincronizat
+          </Link>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-3 py-1 text-xs font-medium text-muted-foreground ring-1 ring-inset ring-border">
+            <UserRound className="h-3.5 w-3.5" />
+            Date nesincronizate
+          </span>
+        )}
+        <Link
+          to="/dispatcher"
+          className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground ring-1 ring-inset ring-border transition-colors hover:bg-foreground hover:text-background"
+          title="Vizualizează dispeceratul (demo)"
+        >
+          <Stethoscope className="h-3.5 w-3.5" />
+          Dispecerat
+        </Link>
+      </div>
     </header>
   );
 }
 
 function TriggerView({
   appState,
-  onPress,
-  onRelease,
+  setAppState,
   onTriage,
   isAuthenticated,
   userProfile,
+  forceCritical,
 }: {
   appState: AppState;
-  onPress: () => void;
-  onRelease: () => void;
-  onTriage: (resp: TriageResponse) => void;
+  setAppState: (s: AppState) => void;
+  onTriage: (resp: TriageResponse | null) => void;
   isAuthenticated: boolean;
   userProfile: UserProfile | null;
+  forceCritical: boolean | null;
 }) {
   const isRecording = appState === "RECORDING";
   const isProcessing = appState === "PROCESSING";
 
-  const [mediaError, setMediaError] = useState<string | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
+  const stoppedRef = useRef(false);
+
+  // Cleanup on unmount.
+  useEffect(() => {
+    return () => {
+      if (mediaRecorderRef.current?.state === "recording") {
+        mediaRecorderRef.current.stop();
+      }
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
+
+  const sendAudio = async (blob: Blob) => {
+    setAppState("PROCESSING");
+    try {
+      const fd = new FormData();
+      fd.append("audioBlob", blob, "symptoms.webm");
+      if (isAuthenticated && userProfile) {
+        fd.append("userProfile", JSON.stringify(userProfile));
+      }
+      fd.append("language", "ro");
+      fd.append(
+        "forceCritical",
+        forceCritical === null ? "auto" : forceCritical ? "true" : "false",
+      );
+
+      const resp = await triageEmergency({ data: fd });
+      onTriage(resp);
+    } catch (err) {
+      console.error(err);
+      toast.error("Nu am putut procesa audio-ul.", {
+        description:
+          "Verifică conexiunea și încearcă din nou. Pentru urgențe reale folosește butonul 112.",
+      });
+      onTriage(null);
+    }
+  };
+
+  // Demo path: forceCritical without microphone. Generates an empty blob and lets the server return the canned response.
+  const runDemo = async () => {
+    setAppState("PROCESSING");
+    // Empty audio is fine — server falls back to forceCritical hint.
+    const blob = new Blob([new Uint8Array(1)], { type: "audio/webm" });
+    await sendAudio(blob);
+  };
 
   const startRecording = async () => {
-    if (isProcessing) return;
-    setMediaError(null);
+    if (isProcessing || isRecording) return;
 
-    onPress();
+    // Quick path for demo mode without microphone.
+    if (forceCritical !== null && typeof navigator === "undefined") {
+      runDemo();
+      return;
+    }
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
+      stoppedRef.current = false;
 
       chunksRef.current = [];
-      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+
+      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm")
+          ? "audio/webm"
+          : "";
+
+      const recorder = mime
+        ? new MediaRecorder(stream, { mimeType: mime })
+        : new MediaRecorder(stream);
       mediaRecorderRef.current = recorder;
 
       recorder.ondataavailable = (e) => {
@@ -439,53 +447,51 @@ function TriggerView({
       };
 
       recorder.onstop = async () => {
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-        try {
-          const formData = new FormData();
-          formData.append("audioBlob", blob);
-          if (isAuthenticated && userProfile) {
-            formData.append("userProfile", JSON.stringify(userProfile));
-          }
-          formData.append("language", "ro");
-
-          // Trimitere directă a obiectului FormData, fără wrapper-ul { data: ... }
-          const resp = (await triageEmergency(formData as any)) as any;
-          onTriage(resp as TriageResponse);
-        } catch (err) {
-          console.error(err);
-          toast.error("Nu am putut procesa audio-ul.", {
-            description: "Încearcă din nou sau folosește demo.",
-          });
-          onTriage(null as any);
-        } finally {
-          // stop mic tracks
-          streamRef.current?.getTracks().forEach((t) => t.stop());
-          streamRef.current = null;
-        }
+        if (stoppedRef.current) return;
+        stoppedRef.current = true;
+        const blob = new Blob(chunksRef.current, {
+          type: recorder.mimeType || "audio/webm",
+        });
+        streamRef.current?.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+        await sendAudio(blob);
       };
 
       recorder.start();
+      setAppState("RECORDING");
     } catch (e) {
       console.error(e);
-      setMediaError("Microfon indisponibil sau permisiune refuzată.");
+      // Microphone unavailable — if a demo override is set, still run the demo.
+      if (forceCritical !== null) {
+        runDemo();
+        return;
+      }
       toast.error("Microfon indisponibil", {
-        description: "Verifică permisiunile microfonului și încearcă din nou.",
+        description:
+          "Verifică permisiunile microfonului sau folosește comutatorul Demo pentru a vedea un exemplu.",
       });
-      onRelease();
     }
   };
 
   const stopRecording = () => {
-    if (isProcessing) return;
-    onRelease();
-
+    if (!isRecording) return;
     const recorder = mediaRecorderRef.current;
     if (recorder && recorder.state !== "inactive") {
       recorder.stop();
+    } else {
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      setAppState("IDLE");
     }
+  };
 
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
+  const handleClick = () => {
+    if (isProcessing) return;
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
   };
 
   return (
@@ -499,10 +505,10 @@ function TriggerView({
       </p>
       <h2 className="mb-12 max-w-md text-2xl font-semibold leading-snug tracking-tight text-foreground sm:text-3xl">
         {isProcessing
-          ? "Sanitas AI analizează simptomele..."
+          ? "SafeCall analizează simptomele..."
           : isRecording
             ? "Descrie liber simptomele tale"
-            : "Apasă și descrie ce te deranjează"}
+            : "Apasă o dată ca să vorbești, încă o dată ca să trimiți"}
       </h2>
 
       <div className="relative">
@@ -510,12 +516,9 @@ function TriggerView({
           <span className="pulse-ring pointer-events-none absolute inset-0 rounded-full" />
         )}
         <button
-          onMouseDown={startRecording}
-          onMouseUp={stopRecording}
-          onMouseLeave={() => isRecording && stopRecording()}
-          onTouchStart={startRecording}
-          onTouchEnd={stopRecording}
+          onClick={handleClick}
           disabled={isProcessing}
+          aria-pressed={isRecording}
           className={`relative flex h-44 w-44 items-center justify-center rounded-full text-primary-foreground shadow-xl transition-all duration-300 select-none ${
             isRecording
               ? "scale-105 bg-[color:var(--accent)] text-[color:var(--accent-foreground)]"
@@ -535,12 +538,24 @@ function TriggerView({
       </div>
 
       <p className="mt-10 max-w-sm text-sm leading-relaxed text-muted-foreground">
-        {isProcessing
-          ? "Procesăm vocea ta în siguranță. Durează câteva secunde."
-          : isRecording
-            ? "Eliberează butonul când ai terminat de descris."
-            : "Ține apăsat și descrie simptomele. Sanitas AI te va îndruma către îngrijirea potrivită."}
+        {isProcessing ? (
+          "Procesăm vocea în siguranță. Durează câteva secunde."
+        ) : isRecording ? (
+          "Apasă din nou când ai terminat de descris."
+        ) : (
+          <>
+            Vorbește în <strong>orice limbă</strong> — SafeCall traduce și structurează automat
+            pentru dispecerii 112.
+          </>
+        )}
       </p>
+
+      {!isRecording && !isProcessing && (
+        <div className="mt-4 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Languages className="h-3.5 w-3.5" />
+          <span>Whisper-style speech-to-text · Gemini 2.0 triaj</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -568,20 +583,31 @@ function AudioWave() {
   );
 }
 
-function SecondaryActions() {
+function SecondaryActions({ isAuthenticated }: { isAuthenticated: boolean }) {
   return (
     <div className="mt-10 grid grid-cols-2 gap-3">
-      <Card className="flex items-center gap-3 border-border/70 p-4 transition-colors hover:bg-muted/50">
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-secondary text-[color:var(--secondary-foreground)]">
-          <FileHeart className="h-5 w-5" />
-        </div>
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-foreground">Istoric Medical</p>
-          <p className="truncate text-xs text-muted-foreground">
-            Consultații, alergii, rețete
-          </p>
-        </div>
-      </Card>
+      <Link
+        to={isAuthenticated ? "/profile" : "/"}
+        className="block"
+        onClick={(e) => {
+          if (!isAuthenticated) {
+            e.preventDefault();
+            toast.info("Disponibil după autentificare ROeID");
+          }
+        }}
+      >
+        <Card className="flex h-full items-center gap-3 border-border/70 p-4 transition-colors hover:bg-muted/50">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-secondary text-[color:var(--secondary-foreground)]">
+            <FileHeart className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-foreground">Istoric Medical</p>
+            <p className="truncate text-xs text-muted-foreground">
+              {isAuthenticated ? "Alergii, medicație, afecțiuni" : "Necesită autentificare"}
+            </p>
+          </div>
+        </Card>
+      </Link>
       <Card className="flex items-center gap-3 border-border/70 p-4 transition-colors hover:bg-muted/50">
         <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[color:var(--accent)]/30 text-[color:var(--accent-foreground)]">
           <Pill className="h-5 w-5" />
@@ -599,16 +625,19 @@ function SecondaryActions() {
 
 function CriticalView({
   userProfile,
+  response,
   onReset,
 }: {
   userProfile: UserProfile | null;
+  response: TriageResponse;
   onReset: () => void;
 }) {
   const name = userProfile?.name.split(" ")[0] ?? "Tu";
+  const dispatcher = response.dataForDispatcher;
 
   const handleCall = () => {
-    toast.success("Date transmise către 112. Apel în curs...", {
-      description: "Dosarul medical și sumarul simptomelor au fost trimise dispeceratului.",
+    toast.success("Date transmise către dispeceratul 112.", {
+      description: "Dosarul medical, locația și sumarul AI au fost trimise. Apel inițiat.",
       duration: 5000,
     });
   };
@@ -623,44 +652,51 @@ function CriticalView({
         Înapoi
       </button>
 
-      <div className="mb-6 inline-flex items-center gap-2 rounded-full bg-[color:var(--warm)]/15 px-3 py-1 text-xs font-medium text-[color:var(--warm)] ring-1 ring-inset ring-[color:var(--warm)]/30">
-        <Sparkles className="h-3.5 w-3.5" />
-        Recomandare prioritară
+      <div className="mb-6 inline-flex items-center gap-2 rounded-full bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive ring-1 ring-inset ring-destructive/30">
+        <AlertTriangle className="h-3.5 w-3.5" />
+        Cod Roșu · Severitate {response.severity}/5
       </div>
 
       <h2 className="text-2xl font-semibold leading-snug tracking-tight text-foreground sm:text-[1.65rem]">
-        {name}, {CRITICAL_RESPONSE.uiMessage}
+        {name}, {response.uiMessage}
       </h2>
 
-      <Card className="mt-6 border-border/70 bg-card p-5">
-        <p className="mb-4 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          Sumar pentru dispecerat
+      <Card className="mt-6 border-destructive/30 bg-destructive/5 p-5">
+        <p className="mb-4 flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-destructive">
+          <Stethoscope className="h-3.5 w-3.5" />
+          Sumar pregătit pentru dispecerat
         </p>
         <dl className="space-y-3 text-sm">
-          <div className="flex items-start justify-between gap-4">
-            <dt className="text-muted-foreground">Simptome</dt>
-            <dd className="text-right font-medium text-foreground">
-              {CRITICAL_RESPONSE.dataForDispatcher.summary}
-            </dd>
-          </div>
-          <div className="flex items-start justify-between gap-4">
-            <dt className="text-muted-foreground">Suspiciune</dt>
-            <dd className="text-right font-medium text-foreground">
-              {CRITICAL_RESPONSE.dataForDispatcher.vitalsRisk}
-            </dd>
-          </div>
+          {dispatcher && (
+            <>
+              <div className="flex items-start justify-between gap-4">
+                <dt className="text-muted-foreground">Simptome</dt>
+                <dd className="text-right font-medium text-foreground">{dispatcher.summary}</dd>
+              </div>
+              <div className="flex items-start justify-between gap-4">
+                <dt className="text-muted-foreground">Suspiciune</dt>
+                <dd className="text-right font-medium text-foreground">{dispatcher.vitalsRisk}</dd>
+              </div>
+            </>
+          )}
           {userProfile && (
             <>
               <div className="flex items-start justify-between gap-4">
+                <dt className="text-muted-foreground">Pacient</dt>
+                <dd className="text-right font-medium text-foreground">
+                  {userProfile.name} · {userProfile.age} ani
+                </dd>
+              </div>
+              <div className="flex items-start justify-between gap-4">
                 <dt className="text-muted-foreground">Alergii</dt>
                 <dd className="text-right font-medium text-foreground">
-                  {userProfile.allergies.join(", ")}
+                  {userProfile.allergies.join(", ") || "—"}
                 </dd>
               </div>
               <div className="flex items-start justify-between gap-4">
                 <dt className="text-muted-foreground">Afecțiuni cronice</dt>
                 <dd className="text-right font-medium text-foreground">
-                  {userProfile.chronicConditions.join(", ")}
+                  {userProfile.chronicConditions.join(", ") || "—"}
                 </dd>
               </div>
             </>
@@ -671,28 +707,32 @@ function CriticalView({
       <Button
         size="lg"
         onClick={handleCall}
-        className="mt-6 h-14 w-full text-base"
+        className="mt-6 h-14 w-full bg-destructive text-base text-destructive-foreground hover:bg-destructive/90"
       >
         <PhoneCall className="h-5 w-5" />
         Contactează Serviciul de Urgență (112)
       </Button>
 
       <p className="mt-3 text-center text-xs leading-relaxed text-muted-foreground">
-        Prin apăsare, dosarul tău medical și sumarul simptomelor vor fi
-        transmise automat dispeceratului pentru a câștiga timp.
+        Prin apăsare, dosarul tău medical și sumarul AI vor fi transmise automat dispeceratului
+        pentru a câștiga timp.
       </p>
+
+      {response.transcript && (
+        <Card className="mt-5 border-border/70 p-4">
+          <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Ce ai spus
+          </p>
+          <p className="text-sm leading-relaxed text-foreground">“{response.transcript}”</p>
+        </Card>
+      )}
     </div>
   );
 }
 
-function MinorView({
-  onReset,
-}: {
-  onReset: () => void;
-  triageResponse?: TriageResponse | null;
-}) {
+function MinorView({ response, onReset }: { response: TriageResponse; onReset: () => void }) {
   const handleEmergency = () => {
-    toast.success("Date transmise către 112. Apel în curs...", {
+    toast.success("Apel la 112 inițiat.", {
       description: "Te punem în legătură cu un dispecer.",
     });
   };
@@ -709,13 +749,42 @@ function MinorView({
 
       <div className="mb-6 inline-flex items-center gap-2 rounded-full bg-[color:var(--accent)]/30 px-3 py-1 text-xs font-medium text-[color:var(--accent-foreground)] ring-1 ring-inset ring-[color:var(--accent)]/40">
         <Sparkles className="h-3.5 w-3.5" />
-        Îndrumare blândă
+        Îndrumare blândă · Severitate {response.severity}/5
       </div>
 
       <h2 className="text-2xl font-semibold leading-snug tracking-tight text-foreground sm:text-[1.65rem]">
-        {MINOR_RESPONSE.uiMessage}
+        {response.uiMessage}
       </h2>
 
+      {/* Rich result cards */}
+      <div className="mt-6 grid gap-3">
+        <ResultCard
+          title="Simptome identificate"
+          icon={<Heart className="h-4 w-4" />}
+          items={response.uiResult.simptome_identificate}
+          tone="neutral"
+        />
+        <ResultCard
+          title="Cauze posibile"
+          icon={<Sparkles className="h-4 w-4" />}
+          items={response.uiResult.cauze_posibile}
+          tone="neutral"
+        />
+        <ResultCard
+          title="Recomandări"
+          icon={<Stethoscope className="h-4 w-4" />}
+          items={response.uiResult.recomandari}
+          tone="positive"
+        />
+        <ResultCard
+          title="Sună 112 dacă apare"
+          icon={<TriangleAlert className="h-4 w-4" />}
+          items={response.uiResult.suna_112_daca_apare}
+          tone="warning"
+        />
+      </div>
+
+      {/* Nearby pharmacies (mock background result) */}
       <Card className="mt-6 overflow-hidden border-border/70">
         <div className="relative flex h-44 items-center justify-center bg-gradient-to-br from-secondary via-muted to-[color:var(--accent)]/25">
           <div className="absolute inset-0 opacity-30 [background-image:linear-gradient(var(--border)_1px,transparent_1px),linear-gradient(90deg,var(--border)_1px,transparent_1px)] [background-size:24px_24px]" />
@@ -757,7 +826,64 @@ function MinorView({
         <PhoneCall className="h-4 w-4" />
         Mă simt totuși foarte rău. Vreau să sun la 112.
       </Button>
+
+      {response.transcript && (
+        <Card className="mt-5 border-border/70 p-4">
+          <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Ce ai spus
+          </p>
+          <p className="text-sm leading-relaxed text-foreground">“{response.transcript}”</p>
+        </Card>
+      )}
     </div>
+  );
+}
+
+function ResultCard({
+  title,
+  icon,
+  items,
+  tone,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  items: string[];
+  tone: "neutral" | "positive" | "warning";
+}) {
+  if (!items.length) return null;
+  const toneClasses =
+    tone === "warning"
+      ? "border-destructive/30 bg-destructive/5"
+      : tone === "positive"
+        ? "border-[color:var(--success)]/30 bg-[color:var(--success)]/5"
+        : "border-border/70";
+
+  const iconClasses =
+    tone === "warning"
+      ? "bg-destructive/10 text-destructive"
+      : tone === "positive"
+        ? "bg-[color:var(--success)]/10 text-[color:var(--success)]"
+        : "bg-secondary text-[color:var(--secondary-foreground)]";
+
+  return (
+    <Card className={`p-4 ${toneClasses}`}>
+      <div className="mb-3 flex items-center gap-2">
+        <span className={`flex h-7 w-7 items-center justify-center rounded-md ${iconClasses}`}>
+          {icon}
+        </span>
+        <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          {title}
+        </p>
+      </div>
+      <ul className="space-y-1.5 text-sm text-foreground">
+        {items.map((item, i) => (
+          <li key={i} className="flex gap-2">
+            <span className="mt-1.5 inline-block h-1 w-1 flex-none rounded-full bg-current opacity-60" />
+            <span className="leading-relaxed">{item}</span>
+          </li>
+        ))}
+      </ul>
+    </Card>
   );
 }
 
@@ -771,13 +897,13 @@ function DemoToggle({
   onChange: (v: boolean | null) => void;
 }) {
   return (
-    <div className="mt-10 flex items-center justify-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+    <div className="mt-6 flex items-center justify-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
       <span>Demo:</span>
       <button
         onClick={() => onChange(null)}
         className={`rounded-full px-2 py-0.5 ring-1 transition-colors ${value === null ? "bg-primary/10 text-primary ring-primary/30" : "ring-border hover:bg-muted"}`}
       >
-        Aleator
+        AI
       </button>
       <button
         onClick={() => onChange(false)}
@@ -787,7 +913,7 @@ function DemoToggle({
       </button>
       <button
         onClick={() => onChange(true)}
-        className={`rounded-full px-2 py-0.5 ring-1 transition-colors ${value === true ? "bg-primary/10 text-primary ring-primary/30" : "ring-border hover:bg-muted"}`}
+        className={`rounded-full px-2 py-0.5 ring-1 transition-colors ${value === true ? "bg-destructive/10 text-destructive ring-destructive/30" : "ring-border hover:bg-muted"}`}
       >
         Critic
       </button>
