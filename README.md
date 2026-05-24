@@ -33,21 +33,42 @@ Comenzi disponibile:
 | `npm run lint` | ESLint + Prettier |
 | `npm run format` | Prettier write |
 
-## Variabile de mediu
+## Cheia Gemini
 
-`.env`:
+Generează una gratuit la <https://aistudio.google.com/app/apikey> și pune-o
+într-unul din locurile de mai jos. Ordinea de prioritate (mare → mică):
 
-```
-GEMINI_API_KEY=...
-VITE_GEMINI_API_KEY=...
-```
+1. **UI**: butonul „Configurează Gemini” din antet → lipești cheia +
+   alegi modelul (`gemini-2.5-flash` recomandat). Cheia se salvează în
+   `localStorage` și se trimite cu fiecare cerere. NU pleacă nicăieri
+   în afara apelului către `generativelanguage.googleapis.com`.
+2. **Cloudflare Workers binding** (produs): variabila `GEMINI_API_KEY`
+   din `wrangler.jsonc` sau secret bound prin `wrangler secret put`.
+3. **`.env`** (dev / build-time fallback):
 
-`VITE_GEMINI_API_KEY` este folosit la build (Vite injectează env-uri
-`VITE_*`). `GEMINI_API_KEY` rămâne disponibil pentru `process.env` în
-runtime-uri Node-like.
+   ```
+   GEMINI_API_KEY=AIza...
+   VITE_GEMINI_API_KEY=AIza...
+   ```
 
-Dacă lipsește cheia sau quota Gemini este depășită, aplicația cade automat pe
-un răspuns de demo plauzibil, ca demo-ul live să nu se blocheze niciodată.
+   `VITE_GEMINI_API_KEY` este injectat prin `import.meta.env`.
+
+### Ce se întâmplă când Gemini eșuează
+
+Aplicația întoarce un răspuns structurat de eroare cu codul:
+
+| cod                  | înțeles                                                       |
+| -------------------- | ------------------------------------------------------------- |
+| `no_api_key`         | nicio cheie configurată                                       |
+| `gemini_quota`       | HTTP 429 — depășire de cotă                                   |
+| `gemini_key_invalid` | HTTP 401/403, sau mesaj care conține „API key expired/invalid”|
+| `gemini_empty`       | Gemini a răspuns, dar fără conținut                           |
+| `gemini_other`       | orice alt HTTP de la Gemini (503, 500 etc.)                   |
+| `no_audio`           | clientul nu a trimis niciun blob audio                        |
+
+Clientul afișează mesajul real într-un toast. Dacă răspunsul include
+un `fallback`, UI-ul îl arată cu eticheta **DEMO** pentru ca demo-ul
+live să nu se blocheze, dar utilizatorul vede clar că nu este AI real.
 
 ## Fluxuri principale
 

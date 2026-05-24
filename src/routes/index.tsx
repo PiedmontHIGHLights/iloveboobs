@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { triageEmergency, type TriageResponse } from "@/lib/safecall-client";
+import { triageEmergency, TriageError, type TriageResponse } from "@/lib/safecall-client";
+import { ApiKeyButton } from "@/components/safecall/api-key-dialog";
 import { toast } from "sonner";
 import {
   AlertTriangle,
@@ -320,7 +321,7 @@ function Header({
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
         {isAuthenticated ? (
           <Link
             to="/profile"
@@ -335,6 +336,7 @@ function Header({
             Date nesincronizate
           </span>
         )}
+        <ApiKeyButton />
         <Link
           to="/dispatcher"
           className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground ring-1 ring-inset ring-border transition-colors hover:bg-foreground hover:text-background"
@@ -393,10 +395,42 @@ function TriggerView({
       onTriage(resp);
     } catch (err) {
       console.error(err);
-      toast.error("Nu am putut procesa audio-ul.", {
-        description:
-          "Verifică conexiunea și încearcă din nou. Pentru urgențe reale folosește butonul 112.",
-      });
+      if (err instanceof TriageError) {
+        if (err.code === "no_api_key") {
+          toast.warning("Configurează cheia Gemini", {
+            description:
+              "Apasă pe „Configurează Gemini” în antet și lipește o cheie de la aistudio.google.com.",
+            duration: 7000,
+          });
+        } else if (err.code === "gemini_quota") {
+          toast.error("Cota Gemini este depășită", {
+            description: err.message,
+            duration: 8000,
+          });
+        } else if (err.code === "gemini_key_invalid") {
+          toast.error("Cheia Gemini a fost respinsă", {
+            description: err.message,
+            duration: 8000,
+          });
+        } else if (err.code === "no_audio") {
+          toast.error("Nu am primit audio", { description: err.message });
+        } else {
+          toast.error("AI-ul nu a răspuns", {
+            description: err.message,
+            duration: 7000,
+          });
+        }
+        if (err.fallback) {
+          onTriage(err.fallback);
+          return;
+        }
+      } else {
+        toast.error("Nu am putut procesa audio-ul.", {
+          description:
+            (err as Error)?.message ??
+            "Verifică conexiunea și încearcă din nou. Pentru urgențe reale folosește butonul 112.",
+        });
+      }
       onTriage(null);
     }
   };
@@ -617,6 +651,23 @@ function SecondaryActions({ isAuthenticated }: { isAuthenticated: boolean }) {
 
 /* -------------------- Result Views -------------------- */
 
+function SourceBadge({ response }: { response: TriageResponse }) {
+  const isAi = response.source === "gemini";
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ring-1 ring-inset ${
+        isAi
+          ? "bg-primary/10 text-primary ring-primary/25"
+          : "bg-muted text-muted-foreground ring-border"
+      }`}
+      title={isAi ? `Răspuns generat de ${response.model ?? "Gemini"}` : "Răspuns demo (canned)"}
+    >
+      <Sparkles className="h-3 w-3" />
+      {isAi ? `AI · ${response.model ?? "Gemini"}` : "Demo"}
+    </span>
+  );
+}
+
 function CriticalView({
   userProfile,
   response,
@@ -646,9 +697,12 @@ function CriticalView({
         Înapoi
       </button>
 
-      <div className="mb-6 inline-flex items-center gap-2 rounded-full bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive ring-1 ring-inset ring-destructive/30">
-        <AlertTriangle className="h-3.5 w-3.5" />
-        Cod Roșu · Severitate {response.severity}/5
+      <div className="mb-6 flex flex-wrap items-center gap-2">
+        <div className="inline-flex items-center gap-2 rounded-full bg-destructive/10 px-3 py-1 text-xs font-medium text-destructive ring-1 ring-inset ring-destructive/30">
+          <AlertTriangle className="h-3.5 w-3.5" />
+          Cod Roșu · Severitate {response.severity}/5
+        </div>
+        <SourceBadge response={response} />
       </div>
 
       <h2 className="text-2xl font-semibold leading-snug tracking-tight text-foreground sm:text-[1.65rem]">
@@ -741,9 +795,12 @@ function MinorView({ response, onReset }: { response: TriageResponse; onReset: (
         Înapoi
       </button>
 
-      <div className="mb-6 inline-flex items-center gap-2 rounded-full bg-[color:var(--accent)]/30 px-3 py-1 text-xs font-medium text-[color:var(--accent-foreground)] ring-1 ring-inset ring-[color:var(--accent)]/40">
-        <Sparkles className="h-3.5 w-3.5" />
-        Îndrumare blândă · Severitate {response.severity}/5
+      <div className="mb-6 flex flex-wrap items-center gap-2">
+        <div className="inline-flex items-center gap-2 rounded-full bg-[color:var(--accent)]/30 px-3 py-1 text-xs font-medium text-[color:var(--accent-foreground)] ring-1 ring-inset ring-[color:var(--accent)]/40">
+          <Sparkles className="h-3.5 w-3.5" />
+          Îndrumare blândă · Severitate {response.severity}/5
+        </div>
+        <SourceBadge response={response} />
       </div>
 
       <h2 className="text-2xl font-semibold leading-snug tracking-tight text-foreground sm:text-[1.65rem]">

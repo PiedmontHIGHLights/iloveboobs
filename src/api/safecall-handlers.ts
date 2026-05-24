@@ -30,12 +30,34 @@ export type PatientUiResult = {
   suna_112_daca_apare: string[];
 };
 
+export type TriageSource = "gemini" | "demo";
+
 export type TriageResponse = {
   severity: Severity;
   uiMessage: string;
   uiResult: PatientUiResult;
   dataForDispatcher?: DispatcherPayload;
   transcript?: string;
+  /** Which path produced this response. */
+  source: TriageSource;
+  /** Model id used (when source = gemini). */
+  model?: string;
+};
+
+export type TriageErrorResponse = {
+  error: true;
+  code:
+    | "no_audio"
+    | "no_api_key"
+    | "gemini_quota"
+    | "gemini_key_invalid"
+    | "gemini_other"
+    | "gemini_empty"
+    | "internal";
+  status?: number;
+  message: string;
+  /** When set, the client can still show the canned demo cards. */
+  fallback?: TriageResponse;
 };
 
 export type DispatcherAlert = {
@@ -77,7 +99,8 @@ function recordAlert(payload: Omit<DispatcherAlert, "id" | "receivedAt">): Dispa
 
 /* ---------- Env / key resolution ---------- */
 
-function getGeminiKey(env: unknown): string | undefined {
+function getGeminiKey(env: unknown, override?: string | null): string | undefined {
+  if (override && override.trim().length > 10) return override.trim();
   if (env && typeof env === "object") {
     const fromEnv =
       (env as Record<string, unknown>).GEMINI_API_KEY ??
@@ -95,6 +118,12 @@ function getGeminiKey(env: unknown): string | undefined {
   }
   return undefined;
 }
+
+/**
+ * Default model. Gemini 2.5 Flash supports audio understanding + structured
+ * output and is available on the free tier (with daily/RPM quotas).
+ */
+const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
 
 async function blobToBase64(blob: Blob): Promise<string> {
   const buf = await blob.arrayBuffer();
@@ -153,18 +182,32 @@ function jsonResponse(value: unknown, status = 200): Response {
 
 /* ---------- Triage ---------- */
 
+function errorResponse(
+  code: TriageErrorResponse["code"],
+  message: string,
+  status: number,
+  fallback?: TriageResponse,
+): Response {
+  const body: TriageErrorResponse = { error: true, code, status, message, fallback };
+  return jsonResponse(body, status);
+}
+
 async function handleTriage(request: Request, env: unknown): Promise<Response> {
   let form: FormData;
   try {
     form = await request.formData();
   } catch (err) {
     console.error("Triage: failed to parse FormData:", err);
-    return jsonResponse(demoFallback("auto", null));
+    return errorResponse("internal", "Cererea nu a putut fi citită (FormData invalid).", 400);
   }
 
   const blob = form.get("audioBlob");
-  if (!(blob instanceof Blob)) {
-    return jsonResponse(demoFallback("auto", null));
+  if (!(blob instanceof Blob) || blob.size === 0) {
+    return errorResponse(
+      "no_audio",
+      "Nu am primit nicio înregistrare audio. Apasă butonul mic, vorbește, apoi apasă din nou pentru a trimite.",
+      400,
+    );
   }
 
   const userProfile = parseUserProfile(form.get("userProfile"));
@@ -172,10 +215,23 @@ async function handleTriage(request: Request, env: unknown): Promise<Response> {
   const forceCriticalRaw = (form.get("forceCritical") as string | null) ?? "auto";
   const forceCritical: "auto" | "true" | "false" =
     forceCriticalRaw === "true" || forceCriticalRaw === "false" ? forceCriticalRaw : "auto";
+  const apiKeyOverride = (form.get("apiKey") as string | null) ?? undefined;
+  const modelOverride = (form.get("model") as string | null)?.trim() || DEFAULT_GEMINI_MODEL;
 
-  const apiKey = getGeminiKey(env);
-  if (!apiKey) {
+  // Demo toggles short-circuit to a canned response — useful for live demos
+  // when there is no API key, no network, or no microphone.
+  if (forceCritical === "true" || forceCritical === "false") {
     return jsonResponse(demoFallback(forceCritical, userProfile));
+  }
+
+  const apiKey = getGeminiKey(env, apiKeyOverride);
+  if (!apiKey) {
+    return errorResponse(
+      "no_api_key",
+      "Lipsește cheia Gemini. Apasă butonul „Configurează Gemini” și lipește o cheie validă (gratuită la aistudio.google.com).",
+      401,
+      demoFallback("false", userProfile),
+    );
   }
 
   let audioBase64: string;
@@ -183,7 +239,7 @@ async function handleTriage(request: Request, env: unknown): Promise<Response> {
     audioBase64 = await blobToBase64(blob);
   } catch (err) {
     console.error("Triage: blob -> base64 failed:", err);
-    return jsonResponse(demoFallback(forceCritical, userProfile));
+    return errorResponse("internal", "Nu am putut codifica audio-ul pentru AI.", 500);
   }
   const mimeType = blob.type || "audio/webm";
 
@@ -191,13 +247,6 @@ async function handleTriage(request: Request, env: unknown): Promise<Response> {
   const chronic = userProfile?.chronicConditions?.join(", ") || "necunoscute";
   const medication = userProfile?.medication?.join(", ") || "necunoscute";
   const age = userProfile?.age ?? "necunoscută";
-
-  const forceHint =
-    forceCritical === "true"
-      ? "\nMod demo: ignoră audio și răspunde ca pentru o urgență MAJORĂ (severitate 5)."
-      : forceCritical === "false"
-        ? "\nMod demo: ignoră audio și răspunde ca pentru o urgență MINORĂ (severitate 2)."
-        : "";
 
   const systemPrompt = `Ești SafeCall — un asistent vocal de triaj medical pentru România. Vorbești CALM, profesionist, fără diagnostice ferme.
 
@@ -209,12 +258,12 @@ Reguli STRICTE:
 - uiResult conține 4 liste scurte (3-5 elemente fiecare).
 - transcript = textul transcris din audio.
 
-Profil pacient (ROeID): vârstă=${age}; alergii=${allergies}; cronice=${chronic}; medicație=${medication}.${forceHint}`;
+Profil pacient (ROeID): vârstă=${age}; alergii=${allergies}; cronice=${chronic}; medicație=${medication}.`;
 
   const userText = `Ascultă înregistrarea pacientului și efectuează triaj.
 Răspunde STRICT cu JSON valid conform schemei, fără text adițional. Limba=${language}.`;
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelOverride)}:generateContent?key=${apiKey}`;
 
   const body = {
     systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -284,8 +333,35 @@ Răspunde STRICT cu JSON valid conform schemei, fără text adițional. Limba=${
     });
     if (!resp.ok) {
       const txt = await resp.text();
-      console.error("Gemini error:", resp.status, txt.slice(0, 200));
-      return jsonResponse(demoFallback(forceCritical, userProfile));
+      console.error("Gemini error:", resp.status, txt.slice(0, 500));
+      let geminiMessage = txt.slice(0, 300);
+      try {
+        const parsedErr = JSON.parse(txt);
+        if (parsedErr?.error?.message) geminiMessage = String(parsedErr.error.message);
+      } catch {
+        // text wasn't JSON, keep raw
+      }
+      const isQuota = resp.status === 429;
+      const looksLikeBadKey =
+        resp.status === 401 ||
+        resp.status === 403 ||
+        /api[_ ]?key|api key (expired|invalid)|API_KEY_INVALID/i.test(
+          geminiMessage,
+        );
+      return errorResponse(
+        isQuota
+          ? "gemini_quota"
+          : looksLikeBadKey
+            ? "gemini_key_invalid"
+            : "gemini_other",
+        isQuota
+          ? `Cota Gemini este depășită pentru această cheie. ${geminiMessage}`
+          : looksLikeBadKey
+            ? `Cheia Gemini a fost respinsă: ${geminiMessage}`
+            : `Gemini a returnat ${resp.status}: ${geminiMessage}`,
+        resp.status,
+        demoFallback("false", userProfile),
+      );
     }
     const result = await resp.json();
     const rawText =
@@ -297,12 +373,22 @@ Răspunde STRICT cu JSON valid conform schemei, fără text adițional. Limba=${
       .replace(/```\s*$/i, "")
       .trim();
     if (!cleaned) {
-      return jsonResponse(demoFallback(forceCritical, userProfile));
+      return errorResponse(
+        "gemini_empty",
+        "Gemini nu a returnat conținut. Încearcă să vorbești mai clar sau mai mult timp.",
+        502,
+        demoFallback("false", userProfile),
+      );
     }
     parsed = JSON.parse(cleaned);
   } catch (err) {
     console.error("Gemini call failed:", err);
-    return jsonResponse(demoFallback(forceCritical, userProfile));
+    return errorResponse(
+      "gemini_other",
+      `Apelul către Gemini a eșuat: ${(err as Error).message ?? "necunoscut"}.`,
+      502,
+      demoFallback("false", userProfile),
+    );
   }
 
   const severity = clampSeverity(parsed?.severity);
@@ -326,6 +412,8 @@ Răspunde STRICT cu JSON valid conform schemei, fără text adițional. Limba=${
     uiResult,
     dataForDispatcher: dispatcher,
     transcript: parsed?.transcript ? String(parsed.transcript) : undefined,
+    source: "gemini",
+    model: modelOverride,
   };
 
   if (response.severity >= 4 && response.dataForDispatcher) {
@@ -378,6 +466,7 @@ function demoFallback(
           "Bărbat, durere toracică intensă cu iradiere în brațul stâng și transpirații reci.",
         vitalsRisk: "Posibil sindrom coronarian acut",
       },
+      source: "demo",
     };
     try {
       recordAlert({
@@ -410,6 +499,7 @@ function demoFallback(
         "Durerea persistă peste 72h",
       ],
     },
+    source: "demo",
   };
 }
 
